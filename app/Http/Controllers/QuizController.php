@@ -13,27 +13,26 @@ class QuizController extends Controller
 {
     public function __construct(private AIService $ai) {}
 
-    /** Show quiz for a project (generate questions if needed) */
+    /** Show quiz */
     public function show(Request $request, Project $project)
     {
         if ($project->user_id !== $request->user()->id) {
             abort(403);
         }
 
-        // Project must be submitted to take quiz
         if ($project->status === 'active') {
             return redirect()->route('projects.show', $project)
-                ->with('error', 'Please submit your project before taking the quiz.');
+                ->with('error', 'Please submit your project first.');
         }
 
-        // If already evaluated, redirect to result
         if ($project->result) {
             return redirect()->route('results.show', $project);
         }
 
-        // Generate quiz questions if they don't exist yet
+        // Generate questions if not exists
         if ($project->quizQuestions()->count() === 0) {
             $questionsData = $this->ai->generateQuiz($project);
+
             foreach ($questionsData as $index => $q) {
                 QuizQuestion::create([
                     'project_id'     => $project->id,
@@ -53,7 +52,7 @@ class QuizController extends Controller
         return view('quiz.show', compact('project', 'questions'));
     }
 
-    /** Submit quiz answers and calculate score */
+    /** Submit quiz */
     public function submit(Request $request, Project $project)
     {
         if ($project->user_id !== $request->user()->id) {
@@ -66,73 +65,105 @@ class QuizController extends Controller
 
         $questions = $project->quizQuestions;
 
+        // ✅ validation
         $request->validate([
             'answers' => ['required', 'array'],
+            'code'    => ['nullable', 'string'],
         ]);
 
         $answers = $request->input('answers', []);
+        $code    = $request->input('code');
+
+        // ✅ quiz scoring
         $correctCount = 0;
 
         foreach ($questions as $question) {
             $userAnswer = $answers[$question->id] ?? '';
+
             if ($question->isCorrect($userAnswer)) {
                 $correctCount++;
             }
         }
 
-        // Calculate score as percentage
+        // 🎯 quiz = 80%
         $score = $questions->count() > 0
-            ? ($correctCount / $questions->count()) * 100
+            ? ($correctCount / $questions->count()) * 80
             : 0;
 
-        $passed = $score >= 60; // Pass threshold: 60%
+        // 🤖 code evaluation = 20%
+        $codeScore = 0;
 
-        // Check submission exists (required for passing)
+        if ($code) {
+            try {
+                $analysis = $this->ai->analyzeCode($code);
+
+                if (
+                    str_contains(strtolower($analysis), 'correct') ||
+                    str_contains(strtolower($analysis), 'good')
+                ) {
+                    $codeScore = 20;
+                }
+
+            } catch (\Exception $e) {
+                $codeScore = 0;
+            }
+        }
+
+        $score += $codeScore;
+
+        $passed = $score >= 60;
+
+        // Submission check
         $submission = $project->submission;
         if (!$submission) {
             $passed = false;
         }
 
-        // Create result record
+        // ✅ save result
         $result = Result::create([
-            'project_id'   => $project->id,
-            'user_id'      => $request->user()->id,
-            'submission_id'=> $submission?->id ?? 0,
-            'quiz_score'   => round($score, 1),
-            'quiz_answers' => $answers,
-            'passed'       => $passed,
-            'evaluated_at' => now(),
+            'project_id'    => $project->id,
+            'user_id'       => $request->user()->id,
+            'submission_id' => $submission?->id ?? 0,
+            'quiz_score'    => round($score, 1),
+            'quiz_answers'  => array_merge($answers, [
+                'code' => $code
+            ]),
+            'passed'        => $passed,
+            'evaluated_at'  => now(),
         ]);
 
-        // Update project status
-        $project->update(['status' => $passed ? 'passed' : 'failed']);
+        // update project
+        $project->update([
+            'status' => $passed ? 'passed' : 'failed'
+        ]);
 
         $user = $request->user();
 
-        // Update user stats
+        // stats
         $user->increment('projects_completed');
+
         if ($passed) {
             $user->increment('projects_passed');
             $user->increment('xp_points', 100);
-
-            // Update or escalate user level
             $this->updateUserLevel($user);
         }
 
-        // Update skill progress
+        // skill progress
         $this->updateSkillProgress($user, $project, $passed);
 
-        // Generate action plan for failures
+        // action plan
         if (!$passed) {
             $actionPlan = $this->ai->generateActionPlan($project, $result);
             $result->update(['action_plan' => $actionPlan]);
         }
 
         return redirect()->route('results.show', $project)
-            ->with('success', $passed ? 'Congratulations! You passed! 🎉' : 'Keep going! Review the action plan.');
+            ->with('success', $passed
+                ? 'Congratulations! You passed!'
+                : 'Keep going! Check your action plan.');
     }
 
-    /** Escalate user level based on completed projects */
+    /** Update level */
     private function updateUserLevel($user): void
     {
         $passed = $user->projects_passed;
@@ -144,15 +175,23 @@ class QuizController extends Controller
         }
     }
 
-    /** Update or create skill progress record */
+    /** Skill progress */
     private function updateSkillProgress($user, Project $project, bool $passed): void
     {
         $progress = SkillProgress::firstOrCreate(
-            ['user_id' => $user->id, 'branch_id' => $project->branch_id],
-            ['projects_completed' => 0, 'projects_passed' => 0, 'is_validated' => false]
+            [
+                'user_id' => $user->id,
+                'branch_id' => $project->branch_id
+            ],
+            [
+                'projects_completed' => 0,
+                'projects_passed' => 0,
+                'is_validated' => false
+            ]
         );
 
         $progress->increment('projects_completed');
+
         if ($passed) {
             $progress->increment('projects_passed');
             $progress->update(['is_validated' => true]);
