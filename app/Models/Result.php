@@ -9,12 +9,13 @@ class Result extends Model
 {
     protected $fillable = [
         'project_id', 'user_id', 'submission_id',
-        'quiz_score', 'quiz_answers', 'passed', 'action_plan', 'evaluated_at',
+        'quiz_score', 'quiz_answers', 'passed', 'action_plan', 'evaluated_at','code_feedback',
     ];
 
     protected $casts = [
         'quiz_score'   => 'float',
         'quiz_answers' => 'array',
+    'code_feedback' => 'array',
         'passed'       => 'boolean',
         'action_plan'  => 'array',
         'evaluated_at' => 'datetime',

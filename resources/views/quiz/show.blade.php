@@ -192,6 +192,28 @@
 
                 <input type="hidden" name="code" id="code_output">
             </div>
+
+            @if(isset($result) && $result->code_feedback)
+                <div class="card p-4 mt-4">
+                    <h3>🤖 AI Code Review</h3>
+
+                    <p>Score: {{ $result->code_feedback['score'] }}/20</p>
+
+                    <p>{{ $result->code_feedback['feedback'] }}</p>
+
+                    <ul>
+                        @foreach($result->code_feedback['mistakes'] as $m)
+                            <li>❌ {{ $m }}</li>
+                        @endforeach
+                    </ul>
+
+                    <ul>
+                        @foreach($result->code_feedback['improvements'] as $i)
+                            <li>💡 {{ $i }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
         </form>
     </div>
 
@@ -335,5 +357,12 @@
                 window.initCodeEditor();
             }
         });
+
+        document.getElementById('quiz-form').addEventListener('submit', function () {
+                if (window.editorInstance) {
+                    document.getElementById('code_output').value = window.editorInstance.getValue();
+                }
+            });
     </script>
 @endpush
+

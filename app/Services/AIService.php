@@ -7,7 +7,6 @@ use App\Models\Project;
 use App\Models\Result;
 use App\Models\User;
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -17,11 +16,14 @@ use Illuminate\Support\Facades\Log;
 class AIService
 {
     private Client $client;
+
     private string $apiKey;
+
     // Primary model — gemini-2.0-flash-lite has higher free quota limits
     private array $models = [
-        'mistralai/mistral-7b-instruct'
+        'mistralai/mistral-7b-instruct',
     ];
+
     private string $baseUrl = 'https://openrouter.ai';
 
     public function __construct()
@@ -39,33 +41,70 @@ class AIService
             $response = $this->callAI($prompt);
             $data = $this->parseJson($response);
 
-            if (!empty($data) && isset($data['title'])) {
+            if (! empty($data) && isset($data['title'])) {
                 return $data;
             }
 
             return $this->fallbackProject($user, $branch);
 
         } catch (\Exception $e) {
-            dd("makhdemch");
-            Log::error('AI Error: ' . $e->getMessage());
+            dd('makhdemch');
+            Log::error('AI Error: '.$e->getMessage());
+
             return $this->fallbackProject($user, $branch);
         }
     }
+
     /**
      * Generate a project brief for the user based on their track, branch, and level.
      */
+    public function analyzeCodeWithContext(Project $project, string $code)
+    {
+        $prompt = "
+You are a senior developer evaluating a student's code.
+
+Project: {$project->title}
+Description: {$project->description}
+Requirements: ".implode(',', $project->requirements)."
+
+Student Code:
+{$code}
+
+Give evaluation in JSON:
+
+{
+  \"score\": 0-20,
+  \"feedback\": \"short feedback\",
+  \"mistakes\": [\"...\"],
+  \"improvements\": [\"...\"]
+}
+";
+
+        try {
+            $response = $this->callAI($prompt);
+            return $this->parseJson($response);
+        } catch (\Exception $e) {
+            return [
+                'score' => 5,
+                'feedback' => 'AI unavailable',
+                'mistakes' => [],
+                'improvements' => [],
+            ];
+        }
+    }
+
     private function callAI(string $prompt): string
     {
         if (empty($this->apiKey)) {
             throw new \RuntimeException('OpenRouter API key not configured.');
         }
 
-        Log::info("AI CALLED (OpenRouter)");
+        Log::info('AI CALLED (OpenRouter)');
 
         try {
             $response = $this->client->post('https://openrouter.ai/api/v1/chat/completions', [
                 'headers' => [
-                    'Authorization' => 'Bearer ' . $this->apiKey,
+                    'Authorization' => 'Bearer '.$this->apiKey,
                     'Content-Type' => 'application/json',
                 ],
                 'json' => [
@@ -73,8 +112,8 @@ class AIService
                     'messages' => [
                         [
                             'role' => 'user',
-                            'content' => $prompt
-                        ]
+                            'content' => $prompt,
+                        ],
                     ],
                     'temperature' => 0.7,
                 ],
@@ -88,7 +127,7 @@ class AIService
                 $body['choices'][0]['message']['content'][0]['text'] ??
                 '';
             if (empty($text)) {
-                Log::error("EMPTY RESPONSE BODY:", ['body' => $body]);
+                Log::error('EMPTY RESPONSE BODY:', ['body' => $body]);
                 throw new \RuntimeException('Empty AI response');
             }
 
@@ -96,7 +135,7 @@ class AIService
 
         } catch (\Exception $e) {
             dd($e);
-            Log::error("OpenRouter Error: " . $e->getMessage());
+            Log::error('OpenRouter Error: '.$e->getMessage());
             throw $e;
         }
     }
@@ -112,9 +151,11 @@ class AIService
             $response = $this->callAI($prompt);
             $data = $this->parseJson($response);
             $questions = $data['questions'] ?? $data ?? [];
-            return !empty($questions) ? $questions : $this->fallbackQuiz($project);
+
+            return ! empty($questions) ? $questions : $this->fallbackQuiz($project);
         } catch (\Exception $e) {
-            Log::warning('AI quiz generation failed: ' . $e->getMessage());
+            Log::warning('AI quiz generation failed: '.$e->getMessage());
+
             return $this->fallbackQuiz($project);
         }
     }
@@ -129,9 +170,11 @@ class AIService
         try {
             $response = $this->callAI($prompt);
             $data = $this->parseJson($response);
+
             return $data ?: $this->fallbackActionPlan($project);
         } catch (\Exception $e) {
-            Log::warning('AI action plan generation failed: ' . $e->getMessage());
+            Log::warning('AI action plan generation failed: '.$e->getMessage());
+
             return $this->fallbackActionPlan($project);
         }
     }
@@ -185,9 +228,20 @@ Description: {$desc}
 
 Requirements:
 - 3 multiple_choice questions
-- 1 scenario question
-- Questions test understanding of concepts used in the project
-- Difficulty should match the {$level} level
+- 1 scenario question (coding/debugging based)
+
+The scenario question MUST:
+- Be related to real coding situations
+- Be based on the project
+- Involve debugging, fixing logic, or improving code
+- NOT be theoretical
+
+Example:
+"You wrote a function but it fails when input is empty. What should you do?"
+
+Questions must test real understanding, not memorization.
+
+Difficulty should match the {$level} level
 
 Return ONLY valid JSON (no markdown, no extra text):
 {
@@ -244,20 +298,37 @@ Return ONLY valid JSON (no markdown, no extra text):
 PROMPT;
     }
 
-
     /**
      * Parse JSON from AI response (handles potential markdown code blocks).
      */
     private function parseJson(string $text): ?array
-    {
-        // Strip markdown code fences if present
-        $text = preg_replace('/^```(?:json)?\s*/m', '', $text);
-        $text = preg_replace('/\s*```$/m', '', $text);
-        $text = trim($text);
+{
+    // نحيد markdown
+    $text = preg_replace('/```json|```/', '', $text);
+    $text = trim($text);
 
-        $data = json_decode($text, true);
-        return json_last_error() === JSON_ERROR_NONE ? $data : null;
+    // نلقاو أول { وآخر }
+    $start = strpos($text, '{');
+    $end   = strrpos($text, '}');
+
+    if ($start === false || $end === false) {
+        return null;
     }
+
+    $json = substr($text, $start, $end - $start + 1);
+
+    $data = json_decode($json, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        \Log::error('JSON ERROR', [
+            'error' => json_last_error_msg(),
+            'json' => $json
+        ]);
+        return null;
+    }
+
+    return $data;
+}
 
     // ─── Static Fallbacks ─────────────────────────────────────────────────────
 
@@ -329,49 +400,49 @@ PROMPT;
                 'question' => "What is the primary purpose of {$branch} in web development?",
                 'type' => 'multiple_choice',
                 'options' => [
-                    "To style web pages",
-                    "To structure, style, or add logic to web pages depending on the technology",
-                    "To manage databases",
-                    "To configure servers",
+                    'To style web pages',
+                    'To structure, style, or add logic to web pages depending on the technology',
+                    'To manage databases',
+                    'To configure servers',
                 ],
-                'correct_answer' => "To structure, style, or add logic to web pages depending on the technology",
+                'correct_answer' => 'To structure, style, or add logic to web pages depending on the technology',
                 'explanation' => "{$branch} plays a core role in web development by providing essential capabilities to build functional applications.",
             ],
             [
                 'question' => "Which of the following is a best practice when working with {$branch}?",
                 'type' => 'multiple_choice',
                 'options' => [
-                    "Write all code in one file",
-                    "Keep code modular and well-organized",
-                    "Avoid using comments",
-                    "Skip error handling",
+                    'Write all code in one file',
+                    'Keep code modular and well-organized',
+                    'Avoid using comments',
+                    'Skip error handling',
                 ],
-                'correct_answer' => "Keep code modular and well-organized",
-                'explanation' => "Modular, well-organized code is easier to maintain, debug, and share with others.",
+                'correct_answer' => 'Keep code modular and well-organized',
+                'explanation' => 'Modular, well-organized code is easier to maintain, debug, and share with others.',
             ],
             [
                 'question' => "In your project '{$project->title}', what was the main technical challenge you solved?",
                 'type' => 'scenario',
                 'options' => [
-                    "Making the design responsive",
-                    "Handling user input and data persistence",
-                    "Connecting to external APIs",
-                    "Optimizing performance",
+                    'Making the design responsive',
+                    'Handling user input and data persistence',
+                    'Connecting to external APIs',
+                    'Optimizing performance',
                 ],
-                'correct_answer' => "Handling user input and data persistence",
-                'explanation' => "Core web projects typically focus on handling user interactions and storing/retrieving data effectively.",
+                'correct_answer' => 'Handling user input and data persistence',
+                'explanation' => 'Core web projects typically focus on handling user interactions and storing/retrieving data effectively.',
             ],
             [
-                'question' => "Which approach is most important for code quality?",
+                'question' => 'Which approach is most important for code quality?',
                 'type' => 'multiple_choice',
                 'options' => [
-                    "Writing code as fast as possible",
-                    "Testing and refactoring regularly",
-                    "Copying code from tutorials without understanding",
-                    "Using as many libraries as possible",
+                    'Writing code as fast as possible',
+                    'Testing and refactoring regularly',
+                    'Copying code from tutorials without understanding',
+                    'Using as many libraries as possible',
                 ],
-                'correct_answer' => "Testing and refactoring regularly",
-                'explanation' => "Regular testing and refactoring ensures your code is maintainable and bug-free over time.",
+                'correct_answer' => 'Testing and refactoring regularly',
+                'explanation' => 'Regular testing and refactoring ensures your code is maintainable and bug-free over time.',
             ],
         ];
     }
@@ -382,13 +453,13 @@ PROMPT;
             'what_went_wrong' => "Your quiz score suggests some gaps in understanding {$project->branch->name} fundamentals. Don't worry — this is a learning opportunity!",
             'concepts_to_review' => [
                 "Core {$project->branch->name} concepts",
-                "Best practices and conventions",
-                "Problem-solving approach",
+                'Best practices and conventions',
+                'Problem-solving approach',
             ],
             'mini_tasks' => [
                 ['task' => "Review the official {$project->branch->name} documentation", 'estimated_time' => '1 hour'],
-                ['task' => "Complete 3 practice exercises on the core concepts", 'estimated_time' => '2 hours'],
-                ['task' => "Rebuild the project from scratch with fresh understanding", 'estimated_time' => '3 hours'],
+                ['task' => 'Complete 3 practice exercises on the core concepts', 'estimated_time' => '2 hours'],
+                ['task' => 'Rebuild the project from scratch with fresh understanding', 'estimated_time' => '3 hours'],
             ],
             'resources' => [
                 ['title' => "MDN Web Docs — {$project->branch->name}", 'type' => 'article'],
