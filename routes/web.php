@@ -48,6 +48,10 @@ Route::middleware(['auth'])->group(function () {
     Route::get('/profile', [ProfileController::class, 'show'])->name('profile.show');
     Route::post('/profile/branch', [ProfileController::class, 'changeBranch'])->name('profile.branch');
 });
-
+Route::get('/vite-test', function () {
+    return file_exists(public_path('build/manifest.json'))
+        ? 'VITE OK'
+        : 'VITE NOT FOUND';
+});
 // ─── Auth Routes (Breeze) ─────────────────────────────────────────────────────
 require __DIR__ . '/auth.php';
