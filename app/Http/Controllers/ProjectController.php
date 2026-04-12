@@ -30,7 +30,6 @@ class ProjectController extends Controller
     /** Show a specific project */
     public function show(Request $request, Project $project)
     {
-        // Authorization: only the project owner can view it
         if ($project->user_id !== $request->user()->id) {
             abort(403);
         }

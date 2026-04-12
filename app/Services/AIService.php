@@ -139,10 +139,6 @@ Give evaluation in JSON:
             throw $e;
         }
     }
-
-    /**
-     * Generate 3–5 quiz questions based on the project details.
-     */
     public function generateQuiz(Project $project): array
     {
         $prompt = $this->buildQuizPrompt($project);
@@ -159,10 +155,6 @@ Give evaluation in JSON:
             return $this->fallbackQuiz($project);
         }
     }
-
-    /**
-     * Generate a personalized action plan for a failed project.
-     */
     public function generateActionPlan(Project $project, Result $result): array
     {
         $prompt = $this->buildActionPlanPrompt($project, $result);
@@ -178,9 +170,6 @@ Give evaluation in JSON:
             return $this->fallbackActionPlan($project);
         }
     }
-
-    // ─── Prompt Builders ──────────────────────────────────────────────────────
-
     private function buildProjectPrompt(User $user, Branch $branch): string
     {
         $level = $user->level;
